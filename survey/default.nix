@@ -19,7 +19,7 @@
   ])."${approach}",
 
   # When changing this, also change the default version of Cabal declared below
-  compiler ? "ghc965",
+  compiler ? "ghc984",
 
   # Tries to use `.a` files when evaluating TH, instead of `.so` files.
   useArchiveFilesForTemplateHaskell ? false,
@@ -27,12 +27,11 @@
   # See https://gitlab.haskell.org/ghc/ghc/-/wikis/commentary/libraries/version-history
   defaultCabalPackageVersionComingWithGhc ?
     ({
-      ghc8107 = "Cabal_3_2_1_0";
-      ghc902 = "Cabal_3_4_1_0";
-      ghc928 = "Cabal_3_6_3_0";
       ghc948 = "Cabal_3_8_1_0";
-      ghc963 = "Cabal_3_10_1_0";
-      ghc965 = "Cabal_3_10_3_0";
+      ghc967 = "Cabal_3_10_3_0";
+      ghc984 = "Cabal_3_10_3_0";
+      ghc9103 = "Cabal_3_12_1_0";
+      ghc9122 = "Cabal_3_4_1_0";
     }."${compiler}"),
 
   # Use `integer-simple` instead of `integer-gmp` to avoid linking in
