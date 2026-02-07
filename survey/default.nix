@@ -488,6 +488,8 @@ let
       gssSupport = false;
       zlib = zlib_both;
       brotliSupport = false; # When brotli is enabled, the `curl` package currently fails to link in `CCLD curl` with error `ld: ../lib/.libs/libcurl.so: undefined reference to `_kBrotliPrefixCodeRanges'`
+      pslSupport = false; # Static libpsl link test fails: configure's AC_CHECK_LIB does `-lpsl` without transitive deps (libunistring, libidn2) needed for static linking
+      http3Support = false; # Static nghttp3/ngtcp2 libs not available in our overlay
     })).overrideAttrs (old: {
       dontDisableStatic = true;
 
