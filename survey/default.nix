@@ -34,10 +34,6 @@
       ghc9122 = "Cabal_3_4_1_0";
     }."${compiler}"),
 
-  # Use `integer-simple` instead of `integer-gmp` to avoid linking in
-  # this LGPL dependency statically.
-  integer-simple ? false,
-
   # Enable for fast iteration.
   # Note that this doesn't always work. I've already found tons of bugs
   # in packages when `-O0` is used, like
@@ -155,9 +151,7 @@ let
           then normalPkgs
           else pkgs;
       haskellPackagesToUseForSetupExe =
-        if integer-simple
-          then pkgsToUseForSetupExe.haskell.packages.integer-simple."${compiler}"
-          else pkgsToUseForSetupExe.haskell.packages."${compiler}";
+        pkgsToUseForSetupExe.haskell.packages."${compiler}";
     in
       haskellPackagesToUseForSetupExe.override (old: {
         overrides = pkgs.lib.composeExtensions (old.overrides or (_: _: {})) (self: super: {
@@ -281,9 +275,7 @@ let
   stackageExecutables =
     let
       normalHaskellPackages =
-        if integer-simple
-          then pkgs.haskell.packages.integer-simple."${compiler}"
-          else pkgs.haskell.packages."${compiler}";
+        pkgs.haskell.packages."${compiler}";
 
       stackageExecutables =
         let
@@ -910,13 +902,7 @@ let
   setupGhcOverlay = final: previous:
     let
       initialHaskellPackages =
-        if integer-simple
-          # Note we don't have to set the `-finteger-simple` flag for packages that GHC
-          # depends on (e.g. text), because nix + GHC already do this for us:
-          #   https://github.com/ghc/ghc/blob/ghc-8.4.3-release/ghc.mk#L620-L626
-          #   https://github.com/peterhoeg/nixpkgs/commit/50050f3cc9e006daa6800f15a29e258c6e6fa4b3#diff-2f6f8fd152c14d37ebd849aa6382257aR35
-          then final.haskell.packages.integer-simple."${compiler}"
-          else final.haskell.packages."${compiler}";
+        final.haskell.packages."${compiler}";
     in
       {
         haskell = previous.haskell // {
@@ -983,23 +969,7 @@ let
                 callCabal2nix =
                   final.haskellPackages.callCabal2nix;
 
-                add_integer-simple_if_needed = haskellPkgs: haskellPkgs // (
-                  # If the `integer-simple` flag is given, and there isn't already
-                  # an `integer-simple` in the Haskell package set, add one as `null`.
-                  # This works around the problem that `stack2nix`-generated Haskell
-                  # package sets lack the `integer-simple` entries, even when everything
-                  # is compiled with integer-simple, which leads to
-                  #   Setup: Encountered missing dependencies:
-                  #   integer-simple
-                  # This PR fixes it in stack2nix:
-                  #   https://github.com/input-output-hk/stack2nix/pull/167
-                  # We still maintain the addition here so that users can use upstream
-                  # `stack2nix` without problems.
-                  if integer-simple && !(builtins.hasAttr "integer-simple" haskellPkgs) then {
-                    integer-simple = null;
-                  } else {});
-
-            in add_integer-simple_if_needed {
+            in {
 
               # This overrides settings for all Haskell packages.
               mkDerivation = attrs: super.mkDerivation (attrs // {
@@ -1152,15 +1122,7 @@ let
                     if disableOptimization
                       then appendBuildFlag drv "--ghc-option=-O"
                       else drv;
-                  # `blaze-textual` has a flag that needs to be given explicitly
-                  # if `integer-simple` is to be used.
-                  # TODO Put this into the `integer-simple` compiler set in nixpkgs? In:
-                  #          https://github.com/NixOS/nixpkgs/blob/ef89b398/pkgs/top-level/haskell-packages.nix#L184
-                  handleIntegerSimple = drv:
-                    if integer-simple
-                      then enableCabalFlag drv "integer-simple"
-                      else drv;
-                in handleIntegerSimple (handleDisableOptimisation super.blaze-textual);
+                in handleDisableOptimisation super.blaze-textual;
 
               # `weigh`'s test suite fails when `-O0` is used
               # because that package inherently relies on optimisation to be on.
@@ -1571,10 +1533,7 @@ let
                     "--ld-option=-Wl,--start-group --ld-option=-Wl,-lstdc++"
                   ]);
 
-              cryptonite =
-                if integer-simple
-                  then disableCabalFlag super.cryptonite "integer-gmp"
-                  else super.cryptonite;
+              cryptonite = super.cryptonite;
 
               # The test-suite of this package loops forever on 100% CPU (at least on `-O0`).
               bench-show = dontCheck super.bench-show;
@@ -1585,15 +1544,9 @@ let
               matrix = dontCheck super.matrix;
               # The test-suite of this package loops forever on 100% CPU (at least on `-O0`).
               # TODO Ask Bas about it
-              scientific =
-                if integer-simple
-                  then dontCheck super.scientific
-                  else super.scientific;
+              scientific = super.scientific;
               # The test-suite of this package loops forever on 100% CPU (at least on `-O0`).
-              x509-validation =
-                if integer-simple
-                  then dontCheck super.x509-validation
-                  else super.x509-validation;
+              x509-validation = super.x509-validation;
 
               # Tests depend on util-linux which depends on systemd
               hakyll =
@@ -1698,14 +1651,14 @@ let
                   # TODO Figure out why this and the below libffi are necessary.
                   #      `working` and `workingStackageExecutables` don't seem to need that,
                   #      but `static-stack2nix-builder-example` does.
-                  (final.lib.optionals (!integer-simple) [
+                  [
                     "--extra-lib-dirs=${final.gmp6.override { withStatic = true; }}/lib"
-                  ])
-                  (final.lib.optionals (!integer-simple && approach == "pkgsMusl") [
+                  ]
+                  (final.lib.optionals (approach == "pkgsMusl") [
                     # GHC needs this if it itself wasn't already built against static libffi
                     # (which is the case in `pkgsStatic` only):
                     "--extra-lib-dirs=${final.libffi}/lib"
-                 ])
+                  ])
                ]);
         in
           final.lib.mapAttrs
