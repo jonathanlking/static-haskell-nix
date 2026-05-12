@@ -719,17 +719,43 @@ let
     # So somehow, the above `zlib_static` uses *this* `zlib`, even though
     # the above uses `previous.zlib.override` and thus shouldn't see this one.
 
-    # Disable failing tests for postgresql on musl that should have no impact
-    # on the libpq that we need (collate.icu.utf8 and foreign regression tests)
-    # This approach is copied from PostgREST, see https://github.com/PostgREST/postgrest/pull/2002/files#diff-72929db01d3c689277a1e7777b5df1dbbb20c5de41d1502ff8ac6b443a4e74c6R45
-    postgresql = (previous.postgresql_14.overrideAttrs (old: { doCheck = false; })).override {
-      # We need libpq, which does not need systemd,
-      # and systemd doesn't currently build with musl.
-      systemdSupport = false;
-      # Kerberos is problematic on static:
-      #     configure: error: could not find function 'gss_init_sec_context' required for GSSAPI
+    # We only need `libpq`, not the full `postgresql` server. nixpkgs split
+    # `libpq` out as a standalone package; using it directly avoids dragging
+    # in the server's many build inputs (systemd, kerberos, pam, llvm-for-JIT)
+    # and sidesteps the LLVM-bitcode-in-`.a`-archives issue that
+    # `postgresql_17`'s `-flto` build path produces (postgres always builds
+    # with the LLVM/clang stdenv to make `-flto` work; gold can't link bitcode).
+    #
+    # `postInstall = ""` clears libpq.nix's default `rm -rfv $dev/lib/*.a`
+    # (which runs in the non-`isStatic` branch under pkgsMusl).
+    # https://github.com/NixOS/nixpkgs/pull/519070 adds `dontDisableStatic`
+    # support to libpq.nix; once on a version of nixpkgs containing that
+    # commit, this should be removed.
+    libpq = (previous.libpq.override {
+      # Kerberos doesn't build on musl/static:
+      #     configure: error: could not find function 'gss_store_cred_into' required for GSSAPI
       gssSupport = false;
-    };
+      # Disable PG18's libcurl-backed OAuth client. We don't need it and
+      # avoiding the dlopen-loaded `libpq-oauth-*.so` keeps the closure
+      # smaller.
+      curlSupport = false;
+      # Build libpq's `libpq.so` against the un-overridden (shared) openssl
+      # from pkgsMusl, not the `openssl = previous.openssl.override { static = true; }`
+      # that this overlay defines above. With static-only openssl,
+      # libpq.so's link `-lssl -lcrypto` would pull OpenSSL's
+      # `ossl_init_register_atexit_ossl_` (and its `atexit` / `pthread_exit`
+      # calls) *statically* into `libpq.so`, where PG18's `libpq-refs-stamp`
+      # policy check (`src/interfaces/libpq/Makefile`) rejects them:
+      #     "libpq must not be calling any function which invokes exit".
+      # Linking shared openssl keeps those references inside libssl.so.
+      # The `libpq.a` output is unaffected: it contains only libpq's own
+      # objects, and downstream static Haskell binaries supply static
+      # `libssl.a`/`libcrypto.a` separately via the `extra-libraries`
+      # propagation set up on `postgresql-libpq-pkgconfig`.
+      openssl = previous.openssl;
+    }).overrideAttrs (_: {
+      postInstall = "";
+    });
 
     procps = previous.procps.override {
       # systemd doesn't currently build with musl.
@@ -1324,32 +1350,32 @@ let
               hasql-notifications =
                 addStaticLinkerFlagsWithPkgconfig
                   super.hasql-notifications
-                  [ final.openssl final.postgresql ]
+                  [ final.openssl final.libpq ]
                   "--libs libpq";
               hasql-queue =
                 addStaticLinkerFlagsWithPkgconfig
                   super.hasql-queue
-                  [ final.openssl final.postgresql ]
+                  [ final.openssl final.libpq ]
                   "--libs libpq";
               pg-harness-server =
                 addStaticLinkerFlagsWithPkgconfig
                   super.pg-harness-server
-                  [ final.openssl final.postgresql ]
+                  [ final.openssl final.libpq ]
                   "--libs libpq";
               postgrest =
                 addStaticLinkerFlagsWithPkgconfig
                   super.postgrest
-                  [ final.openssl final.postgresql ]
+                  [ final.openssl final.libpq ]
                   "--libs libpq";
               postgresql-orm =
                 addStaticLinkerFlagsWithPkgconfig
                   super.postgresql-orm
-                  [ final.openssl final.postgresql ]
+                  [ final.openssl final.libpq ]
                   "--libs libpq";
               postgresql-schema =
                 addStaticLinkerFlagsWithPkgconfig
                   super.postgresql-schema
-                  [ final.openssl final.postgresql ]
+                  [ final.openssl final.libpq ]
                   "--libs openssl libpq";
               postgresql-simple-migration =
                 addStaticLinkerFlagsWithPkgconfig
@@ -1359,7 +1385,7 @@ let
               squeal-postgresql =
                 addStaticLinkerFlagsWithPkgconfig
                   super.squeal-postgresql
-                  [ final.openssl final.postgresql ]
+                  [ final.openssl final.libpq ]
                   "--libs openssl libpq";
               tmp-postgres =
                 addStaticLinkerFlagsWithPkgconfig
@@ -1371,7 +1397,7 @@ let
               postgresql-migration =
                 addStaticLinkerFlagsWithPkgconfig
                   super.postgresql-migration
-                  [ final.openssl final.postgresql ]
+                  [ final.openssl final.libpq ]
                   "--libs libpq libcrypto";
 
               xml-to-json =
