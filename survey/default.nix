@@ -1456,7 +1456,8 @@ let
                     libpng
                     libtiff
                     zlib_both
-                    lzma
+                    # liblzma C library now lives at `xz` in nixpkgs.
+                    xz
                     libwebp
                   ])
                   "--libs nettle sdl2 SDL2_image xcursor libpng libjpeg libtiff-4 libwebp";
