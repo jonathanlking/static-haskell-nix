@@ -580,6 +580,55 @@ let
         enableShared = !useArchiveFilesForTemplateHaskell;
        }
     )
+
+    # GHC bug workaround: when GHC is built with `-split-sections`, both the
+    # make-based and hadrian build systems invoke `ld -r` with the linker
+    # script `driver/utils/merge_sections.ld` (in GHC's source tree since at
+    # least 9.0) to produce a per-package merged `HS<pkg>-<ver>-<hash>.o`
+    # ("ghci library") object that GHC's RTS linker loads at TH-eval time.
+    # That linker script catches `.rodata.cst32` under the `.rodata`
+    # wildcard, which loses the 32-byte alignment of AVX2 SIMD constants
+    # emitted by gcc into that section. The merged `.o` is therefore
+    # defective: any code that does an aligned 256-bit load against one of
+    # those constants (e.g. bytestring's `isValidUtf8` AVX2 path on inputs
+    # ≥ 128 bytes) faults at TH-eval time when the RTS linker happens to
+    # map `.rodata` at a non-32-aligned address. Whether the fault actually
+    # fires depends on load-time placement: in some configurations the
+    # constants coincidentally land on a 32-byte boundary and the defect
+    # stays latent.
+    #
+    # We make two changes — either on its own should be enough to prevent
+    # the crash:
+    #  1. `postPatch` patches `merge_sections.ld` to preserve
+    #     `.rodata.cst32` (and `.cst64`) as their own output sections.
+    #     This is a fix for the underlying bug, included to describe the
+    #     cause. It is guarded on file existence so a future GHC that
+    #     drops `merge_sections.ld` is unaffected.
+    #  2. `postFixup` deletes the merged `HS<pkg>-<ver>-<hash>.o` files
+    #     after install. The RTS linker then loads the `.a` archive
+    #     members instead, where the alignment is preserved per-object.
+    #     This is what removes the problem from the toolchain we ship.
+    #
+    # The second change has the same effect as upstream GHC commit
+    #     https://gitlab.haskell.org/ghc/ghc/-/commit/53038ea9
+    # which (post-9.12) removes the ghci-library merge step entirely:
+    # in both cases no merged `.o` is loaded, so the RTS linker uses
+    # the `.a` archive members. Drop this `lib.pipe` step once the
+    # toolchain moves to a GHC that includes that commit (≥ 9.14).
+    (ghcPackage:
+      ghcPackage.overrideAttrs (old: {
+        postPatch = (old.postPatch or "") + ''
+          if [ -f driver/utils/merge_sections.ld ]; then
+            substituteInPlace driver/utils/merge_sections.ld --replace \
+              '.rodata.cst16 : {' \
+              '.rodata.cst64 : { *(.rodata.cst64*) } .rodata.cst32 : { *(.rodata.cst32*) } .rodata.cst16 : {'
+          fi
+        '';
+        postFixup = (old.postFixup or "") + ''
+          find "$out" \( -name 'HS*-*.o' -o -name 'HS*-*.p_o' \) -delete
+        '';
+      })
+    )
   ];
 
 
