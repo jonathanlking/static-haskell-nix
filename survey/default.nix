@@ -806,6 +806,15 @@ let
       postInstall = "";
     });
 
+    # nixpkgs's Haskell overlay drags the full `postgresql` server into the
+    # closure of `postgresql-simple` (as a test-tool dep, for spinning up a
+    # real DB during checks)
+    postgresql = previous.postgresql.override {
+      gssSupport = false;
+      curlSupport = false;
+      openssl = previous.openssl;
+    };
+
     procps = previous.procps.override {
       # systemd doesn't currently build with musl.
       withSystemd = false;
@@ -1394,60 +1403,38 @@ let
                   [ final.openssl final.zlib_both ]
                   "--libs openssl zlib";
 
-              # TODO For the below packages, it would be better if we could somehow make all users
-              # of postgresql-libpq link in openssl via pkgconfig.
-              hasql-notifications =
-                addStaticLinkerFlagsWithPkgconfig
-                  super.hasql-notifications
-                  [ final.openssl final.libpq ]
-                  "--libs libpq";
-              hasql-queue =
-                addStaticLinkerFlagsWithPkgconfig
-                  super.hasql-queue
-                  [ final.openssl final.libpq ]
-                  "--libs libpq";
-              pg-harness-server =
-                addStaticLinkerFlagsWithPkgconfig
-                  super.pg-harness-server
-                  [ final.openssl final.libpq ]
-                  "--libs libpq";
-              postgrest =
-                addStaticLinkerFlagsWithPkgconfig
-                  super.postgrest
-                  [ final.openssl final.libpq ]
-                  "--libs libpq";
-              postgresql-orm =
-                addStaticLinkerFlagsWithPkgconfig
-                  super.postgresql-orm
-                  [ final.openssl final.libpq ]
-                  "--libs libpq";
-              postgresql-schema =
-                addStaticLinkerFlagsWithPkgconfig
-                  super.postgresql-schema
-                  [ final.openssl final.libpq ]
-                  "--libs openssl libpq";
-              postgresql-simple-migration =
-                addStaticLinkerFlagsWithPkgconfig
-                  super.postgresql-simple-migration
-                  [ final.openssl ]
-                  "--libs openssl";
-              squeal-postgresql =
-                addStaticLinkerFlagsWithPkgconfig
-                  super.squeal-postgresql
-                  [ final.openssl final.libpq ]
-                  "--libs openssl libpq";
-              tmp-postgres =
-                addStaticLinkerFlagsWithPkgconfig
-                  (dontCheck super.tmp-postgres) # flaky/stuck tests: https://github.com/jfischoff/tmp-postgres/issues/273
-                  [ final.openssl ]
-                  "--libs openssl";
-
-              # This one needs `libcrypto` explicitly for reasons not yet investigated. `libpq` should pull it in via `openssl`.
-              postgresql-migration =
-                addStaticLinkerFlagsWithPkgconfig
-                  super.postgresql-migration
-                  [ final.openssl final.libpq ]
-                  "--libs libpq libcrypto";
+              # Route libpq's static-link deps through `postgresql-libpq-pkgconfig`
+              # so every Haskell `libpq` consumer picks them up under
+              # `--enable-executable-static`. nixpkgs's `configuration-nix.nix`
+              # wires the Haskell `postgresql-libpq` binding through this
+              # sub-package, so propagation is centralised here.
+              #
+              # Two pieces:
+              #   - `addPkgconfigDepend openssl`: makes `libssl.pc`/`libcrypto.pc`
+              #     available so `pkg-config --static --libs libpq` resolves
+              #     `libpq.pc`'s `Requires.private` -- otherwise `-lssl`/`-lcrypto`
+              #     are silently dropped from the link line.
+              #   - `prePatch` injects `extra-libraries: pq, pgcommon, pgport, ssl,
+              #     crypto` into the `.cabal`. GHC aggregates each dep's
+              #     `InstalledPackageInfo.extraLibraries` at link time, so every
+              #     transitive consumer picks them up.
+              #
+              # `pq` first: ld walks static archives left-to-right, so
+              # `libpgcommon.a`'s objects would be discarded before `libpq.a`
+              # introduces references to them.
+              postgresql-libpq-pkgconfig =
+                let
+                  withExtraLibs = overrideCabal super.postgresql-libpq-pkgconfig (drv: {
+                    # `printf` constructs the multi-line replacement so the cabal
+                    # indentation isn't eaten by Nix's `''...''` dedent.
+                    prePatch = (drv.prePatch or "") + ''
+                      substituteInPlace postgresql-libpq-pkgconfig.cabal --replace-fail \
+                        "pkgconfig-depends: libpq >=14.12" \
+                        "$(printf 'pkgconfig-depends: libpq >=14.12\n  extra-libraries: pq, pgcommon, pgport, ssl, crypto')"
+                    '';
+                  });
+                in
+                  final.haskell.lib.addPkgconfigDepend withExtraLibs final.openssl;
 
               xml-to-json =
                 addStaticLinkerFlagsWithPkgconfig
@@ -1764,7 +1751,7 @@ in
         bench
         dhall
         dhall-json
-        # postgrest # Dependency `configurator-pg-0.2.7` does not build due to `megaparsec >=7.0.0 && <9.3` (This is fixed in `configurator-pg- 0.2.8`)
+        postgrest
         # proto3-suite # Dependency `proto3-wire-1.4.0` does not build due to `bytestring >=0.10.6.0 && <0.11.0`
         hsyslog # Small example of handling https://github.com/NixOS/nixpkgs/issues/43849 correctly
         # aura # `aur` maked as broken in nixpkgs, but works here with `allowBroken = true;` actually
