@@ -561,6 +561,32 @@ let
       makeFlags = [ "curl_LDFLAGS=-all-static" ];
     });
 
+  # Takes an openssl derivation and overrides it to have both `.a` and `.so`
+  # files. Openssl's shared build removes the `.a` files in postInstall, so
+  # we copy them in from a separately-built static-only variant.
+  statify_openssl = openssl_drv:
+    let
+      static = openssl_drv.override { static = true; };
+    in
+      openssl_drv.overrideAttrs (old: {
+        postInstall = (old.postInstall or "") + ''
+          cp ${static.out}/lib/*.a "$out/lib/"
+        '';
+      });
+
+  # Takes an ncurses derivation and overrides it to have both `.a` and `.so`
+  # files. Ncurses's shared build removes the `.a` files in postInstall, so
+  # we copy them in from a separately-built static-only variant.
+  statify_ncurses = ncurses_drv:
+    let
+      static = ncurses_drv.override { enableStatic = true; };
+    in
+      ncurses_drv.overrideAttrs (old: {
+        postInstall = (old.postInstall or "") + ''
+          cp ${static}/lib/*.a "$out/lib/"
+        '';
+      });
+
 
   fixGhc = ghcPackage0: lib.pipe ghcPackage0 [
     # musl does not support libdw's alleged need for `dlopen()`, see:
@@ -788,20 +814,6 @@ let
       # avoiding the dlopen-loaded `libpq-oauth-*.so` keeps the closure
       # smaller.
       curlSupport = false;
-      # Build libpq's `libpq.so` against the un-overridden (shared) openssl
-      # from pkgsMusl, not the `openssl = previous.openssl.override { static = true; }`
-      # that this overlay defines above. With static-only openssl,
-      # libpq.so's link `-lssl -lcrypto` would pull OpenSSL's
-      # `ossl_init_register_atexit_ossl_` (and its `atexit` / `pthread_exit`
-      # calls) *statically* into `libpq.so`, where PG18's `libpq-refs-stamp`
-      # policy check (`src/interfaces/libpq/Makefile`) rejects them:
-      #     "libpq must not be calling any function which invokes exit".
-      # Linking shared openssl keeps those references inside libssl.so.
-      # The `libpq.a` output is unaffected: it contains only libpq's own
-      # objects, and downstream static Haskell binaries supply static
-      # `libssl.a`/`libcrypto.a` separately via the `extra-libraries`
-      # propagation set up on `postgresql-libpq-pkgconfig`.
-      openssl = previous.openssl;
     }).overrideAttrs (_: {
       postInstall = "";
     });
@@ -812,7 +824,6 @@ let
     postgresql = previous.postgresql.override {
       gssSupport = false;
       curlSupport = false;
-      openssl = previous.openssl;
     };
 
     procps = previous.procps.override {
@@ -842,7 +853,14 @@ let
 
     libusb1 = previous.libusb1.override { withStatic = true; enableUdev = false; };
 
-    openssl = previous.openssl.override { static = true; };
+    ncurses = statify_ncurses previous.ncurses;
+
+    # `openssl` has to be passed `pkgsDontDisableStatic.openssl` rather
+    # than `previous.openssl`, because the helper's inner `.override`'s
+    # dependency walk through `previous` reaches `curl -> openssl` and
+    # ultimately resolves back to `final.openssl` (the dual-form override
+    # under construction), producing an infinite recursion.
+    openssl = statify_openssl pkgsDontDisableStatic.openssl;
 
     zstd = previous.zstd.override { enableStatic = true; };
 
