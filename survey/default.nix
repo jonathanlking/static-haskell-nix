@@ -71,7 +71,7 @@ let
   # `.override` and the likes).
   isProperHaskellPackage = val:
     lib.isDerivation val && # must pass lib.isDerivation
-    val ? env; # must have an .env key
+    val ? getCabalDeps; # must have a .getCabalDeps key
 
   # Function that tells us if a given Haskell package has an executable.
   # Pass only Haskell packages to this!
@@ -468,12 +468,15 @@ let
       });
 
   # Takes a zlib derivation and overrides it to have both .a and .so files.
+  # Only the arguments zlib actually declares are passed, as nixpkgs 26.05 drops
+  # `static`, with static libs being built by default.
   statify_zlib = zlib_drv:
-    (zlib_drv.override {
-      shared = true;
-      static = true;
-      splitStaticOutput = false;
-    }).overrideAttrs (old: { dontDisableStatic = true; });
+    (zlib_drv.override
+      (lib.intersectAttrs (lib.functionArgs zlib_drv.override) {
+        shared = true;
+        static = true;
+        splitStaticOutput = false;
+      })).overrideAttrs (old: { dontDisableStatic = true; });
 
   # Takes a curl derivation and overrides it to have both .a and .so files,
   # and have the `curl` executable be statically linked.
